@@ -10,18 +10,42 @@ echo "  memory-hub installer"
 echo "  one memory. every agent. yours."
 echo ""
 
+# mcp requires Python >= 3.10. macOS's stock /usr/bin/python3 (Xcode CLT) is
+# often 3.9.x, so probe for a newer interpreter instead of assuming "python3".
+find_python() {
+  for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+    PYBIN="$(command -v "$candidate" 2>/dev/null)" || continue
+    if "$PYBIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      echo "$PYBIN"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PY="$(find_python)" || {
+  echo "  memory-hub needs Python 3.10 or newer. This Mac's python3 is:"
+  python3 --version 2>&1 | sed 's/^/    /'
+  echo ""
+  echo "  Install a newer one, then re-run this installer:"
+  echo "    brew install python@3.12"
+  echo ""
+  exit 1
+}
+echo "==> Using $PY ($("$PY" --version 2>&1))"
+
 mkdir -p "$HUB"
 cp "$SCRIPT_DIR/memory_hub.py" "$HUB/"
 
 echo "==> Installing dependency (mcp<2)..."
-pip3 install "mcp<2" --quiet 2>/dev/null || pip3 install "mcp<2" --break-system-packages --quiet
+"$PY" -m pip install "mcp<2" --quiet 2>/dev/null || "$PY" -m pip install "mcp<2" --user --break-system-packages --quiet
 
 WIRED=()
 TODO=()
 
 echo "==> Claude Code..."
 if command -v claude >/dev/null 2>&1; then
-  if claude mcp add memory-hub -- python3 "$HUB/memory_hub.py" >/dev/null 2>&1; then
+  if claude mcp add memory-hub -- "$PY" "$HUB/memory_hub.py" >/dev/null 2>&1; then
     WIRED+=("Claude Code")
   else
     TODO+=("Claude Code (wiring command failed)")
@@ -33,13 +57,13 @@ fi
 echo "==> opencode..."
 OC_CONFIG="$HOME/.config/opencode/opencode.json"
 if [ -f "$OC_CONFIG" ]; then
-  python3 - "$OC_CONFIG" << 'PYEOF'
+  "$PY" - "$OC_CONFIG" "$PY" << 'PYEOF'
 import json, os, sys
-p = sys.argv[1]
+p, py = sys.argv[1], sys.argv[2]
 cfg = json.load(open(p))
 cfg.setdefault("mcp", {})["memory-hub"] = {
     "type": "local",
-    "command": ["python3", os.path.expanduser("~/memory-hub/memory_hub.py")],
+    "command": [py, os.path.expanduser("~/memory-hub/memory_hub.py")],
 }
 json.dump(cfg, open(p, "w"), indent=2)
 PYEOF
@@ -53,12 +77,12 @@ for CFG in "$HOME/.cursor/mcp.json:Cursor" "$HOME/.codeium/windsurf/mcp_config.j
   P=${CFG%%:*}
   NAME=${CFG##*:}
   if [ -f "$P" ]; then
-    python3 - "$P" << 'PYEOF'
+    "$PY" - "$P" "$PY" << 'PYEOF'
 import json, os, sys
-p = sys.argv[1]
+p, py = sys.argv[1], sys.argv[2]
 cfg = json.load(open(p))
 cfg.setdefault("mcpServers", {})["memory-hub"] = {
-    "command": "python3",
+    "command": py,
     "args": [os.path.expanduser("~/memory-hub/memory_hub.py")],
 }
 json.dump(cfg, open(p, "w"), indent=2)
@@ -77,10 +101,10 @@ elif [ -x "$HOME/.hermes/hermes-agent/venv/bin/hermes" ]; then
   HERMES_BIN="$HOME/.hermes/hermes-agent/venv/bin/hermes"
 fi
 if [ -n "$HERMES_BIN" ]; then
-  if "$HERMES_BIN" mcp add memory-hub --command python3 --args "$HUB/memory_hub.py" >/dev/null 2>&1; then
+  if echo "y" | "$HERMES_BIN" mcp add memory-hub --command "$PY" --args "$HUB/memory_hub.py" >/dev/null 2>&1; then
     WIRED+=("Hermes")
   else
-    TODO+=("Hermes (run: hermes mcp add, point it at python3 $HUB/memory_hub.py)")
+    TODO+=("Hermes (run: hermes mcp add, point it at $PY $HUB/memory_hub.py)")
   fi
 else
   TODO+=("Hermes (not installed)")

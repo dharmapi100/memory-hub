@@ -55,19 +55,62 @@ else
 fi
 
 echo "==> opencode..."
-OC_CONFIG="$HOME/.config/opencode/opencode.json"
-if [ -f "$OC_CONFIG" ]; then
-  "$PY" - "$OC_CONFIG" "$PY" << 'PYEOF'
-import json, os, sys
+# opencode's current default config filename is opencode.jsonc (JSON with
+# // comments allowed); older setups may still have opencode.json. Check both.
+OC_CONFIG=""
+for CANDIDATE in "$HOME/.config/opencode/opencode.jsonc" "$HOME/.config/opencode/opencode.json"; do
+  if [ -f "$CANDIDATE" ]; then
+    OC_CONFIG="$CANDIDATE"
+    break
+  fi
+done
+if [ -n "$OC_CONFIG" ]; then
+  if "$PY" - "$OC_CONFIG" "$PY" << 'PYEOF'
+import json, os, re, sys
 p, py = sys.argv[1], sys.argv[2]
-cfg = json.load(open(p))
+raw = open(p).read()
+
+def strip_jsonc(text):
+    # Remove // and /* */ comments while respecting string literals.
+    out, i, in_str, n = [], 0, False, len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1]); i += 2; continue
+            if c == '"':
+                in_str = False
+            i += 1; continue
+        if c == '"':
+            in_str = True; out.append(c); i += 1; continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        out.append(c); i += 1
+    return "".join(out)
+
+try:
+    cfg = json.loads(raw)
+except json.JSONDecodeError:
+    cfg = json.loads(strip_jsonc(raw))
+
 cfg.setdefault("mcp", {})["memory-hub"] = {
     "type": "local",
     "command": [py, os.path.expanduser("~/memory-hub/memory_hub.py")],
 }
 json.dump(cfg, open(p, "w"), indent=2)
 PYEOF
-  WIRED+=("opencode")
+  then
+    WIRED+=("opencode")
+  else
+    TODO+=("opencode (found $OC_CONFIG but it could not be parsed/updated - edit it by hand)")
+  fi
 else
   TODO+=("opencode (config not found)")
 fi
